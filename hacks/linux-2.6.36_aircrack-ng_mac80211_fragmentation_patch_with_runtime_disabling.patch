@@ -1,0 +1,52 @@
+This is a modified version of the mac80211 packet injection patch for kernel
+2.6.36 with the option of disabling it at runtime. It needs to be disabled for
+hostapd to work.
+
+Usage:
+echo 0 >/sys/module/mac80211/parameters/ieee80211_injection_patch
+
+ -- Tomáš Janoušek <tomi@nomi.cz>
+
+diff --git a/net/mac80211/tx.c b/net/mac80211/tx.c
+index c54db96..c1fca29 100644
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -750,6 +750,10 @@ ieee80211_tx_h_rate_ctrl(struct ieee80211_tx_data *tx)
+ 	return TX_CONTINUE;
+ }
+ 
++static int ieee80211_injection_patch = 0;
++module_param(ieee80211_injection_patch, int, 0644);
++MODULE_PARM_DESC(ieee80211_injection_patch, "Enable packet injection patch");
++
+ static ieee80211_tx_result debug_noinline
+ ieee80211_tx_h_sequence(struct ieee80211_tx_data *tx)
+ {
+@@ -761,10 +765,24 @@ ieee80211_tx_h_sequence(struct ieee80211_tx_data *tx)
+ 
+ 	/*
+ 	 * Packet injection may want to control the sequence
+-	 * number, if we have no matching interface then we
+-	 * neither assign one ourselves nor ask the driver to.
++	 * number, so if an injected packet is found, skip
++	 * renumbering it. Also make the packet NO_ACK to avoid
++	 * excessive retries (ACKing and retrying should be
++	 * handled by the injecting application).
++	 * FIXME This may break hostapd and some other injectors.
++	 * This should be done using a radiotap flag. For the time being, this
++	 * may be enabled/disabled in
++	 * /sys/module/mac80211/parameters/ieee80211_injection_patch
+ 	 */
+-	if (unlikely(info->control.vif->type == NL80211_IFTYPE_MONITOR))
++	if (unlikely(ieee80211_injection_patch &&
++	   (info->flags & IEEE80211_TX_CTL_INJECTED) &&
++	   !(tx->sdata->u.mntr_flags & MONITOR_FLAG_COOK_FRAMES))) {
++		if (!ieee80211_has_morefrags(hdr->frame_control))
++			info->flags |= IEEE80211_TX_CTL_NO_ACK;
++		return TX_CONTINUE;
++	}
++	if (unlikely(!ieee80211_injection_patch &&
++	   info->control.vif->type == NL80211_IFTYPE_MONITOR))
+ 		return TX_CONTINUE;
+ 
+ 	if (unlikely(ieee80211_is_ctl(hdr->frame_control)))

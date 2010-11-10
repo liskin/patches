@@ -1,0 +1,50 @@
+From 8c7f56d92d8471ee059c14d322af5f7f555dd5c6 Mon Sep 17 00:00:00 2001
+From: Tomas Janousek <tomi@nomi.cz>
+Date: Wed, 28 Mar 2007 14:46:30 -0400
+Subject: [PATCH] Bug #10296: Fix timer rescheduling.
+
+---
+ os/WaitFor.c |    9 ++++++---
+ 1 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/os/WaitFor.c b/os/WaitFor.c
+index d39964f..4a606ac 100644
+--- a/os/WaitFor.c
++++ b/os/WaitFor.c
+@@ -125,7 +125,7 @@ struct _OsTimerRec {
+ };
+ 
+ static void DoTimer(OsTimerPtr timer, CARD32 now, OsTimerPtr *prev);
+-static void CheckAllTimers(CARD32 now);
++static void CheckAllTimers(void);
+ static OsTimerPtr timers = NULL;
+ 
+ /*****************
+@@ -204,7 +204,7 @@ WaitForSomething(int *pClientsReady)
+ 	    timeout = timers->expires - now;
+             if (timeout > 0 && timeout > timers->delta + 250) {
+                 /* time has rewound.  reset the timers. */
+-                CheckAllTimers(now);
++                CheckAllTimers();
+             }
+ 
+ 	    if (timers) {
+@@ -436,11 +436,14 @@ ANYSET(FdMask *src)
+ /* If time has rewound, re-run every affected timer.
+  * Timers might drop out of the list, so we have to restart every time. */
+ static void
+-CheckAllTimers(CARD32 now)
++CheckAllTimers(void)
+ {
+     OsTimerPtr timer;
++    CARD32 now;
+ 
+ start:
++    now = GetTimeInMillis();
++
+     for (timer = timers; timer; timer = timer->next) {
+         if (timer->expires - now > timer->delta + 250) {
+             TimerForce(timer);
+-- 
+1.7.1
+

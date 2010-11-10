@@ -1,0 +1,53 @@
+From 5cdc98b8f51310f7cca05ad780f18f80dd9571de Mon Sep 17 00:00:00 2001
+From: Tomas Janousek <tomi@nomi.cz>
+Date: Tue, 29 Jul 2008 22:33:51 -0700
+Subject: [PATCH] rtc-dev: stop periodic interrupts on device release
+
+Solves http://bugzilla.kernel.org/show_bug.cgi?id=11127
+
+The old rtc.c driver did it and some drivers (like rtc-sh) do it in their
+release function, though they should not -- because they should provide
+the irq_set_state op and the rtc framework itself should care about it.
+This patch makes it do so.
+
+I am aware that some drivers, like rtc-sh, handle userspace PIE sets in
+their ioctl op (instead of having the framework call the op), exporting
+the irq_set_state op at the same time.  The logic in rtc_irq_set_state
+should make sure it doesn't matter and the driver should not need to care
+stopping periodic interrupts in its release routine any more.
+
+The correct way, in my opinion, should be this:
+1) The driver provides the irq_set_state op and does not care closing the
+   interrupts in its release op.
+2) If the driver does not provide the op and handles PIE in the ioctl op, it's
+   reponsible for closing them in its release op.
+3) Something similar for other IRQs, like UIE -- if there's no in-kernel API
+   like irq_set_state, handle it in ioctl and release ops. The framework will
+   be responsible either for everything or for nothing. (This will probably
+   change later.)
+
+Signed-off-by: Tomas Janousek <tomi@nomi.cz>
+Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+Acked-by: Alessandro Zummo <a.zummo@towertech.it>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ drivers/rtc/rtc-dev.c |    2 ++
+ 1 files changed, 2 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/rtc/rtc-dev.c b/drivers/rtc/rtc-dev.c
+index ae3bd4d..856cc1a 100644
+--- a/drivers/rtc/rtc-dev.c
++++ b/drivers/rtc/rtc-dev.c
+@@ -432,6 +432,8 @@ static int rtc_dev_release(struct inode *inode, struct file *file)
+ #ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
+ 	clear_uie(rtc);
+ #endif
++	rtc_irq_set_state(rtc, NULL, 0);
++
+ 	if (rtc->ops->release)
+ 		rtc->ops->release(rtc->dev.parent);
+ 
+-- 
+1.7.1
+

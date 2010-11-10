@@ -1,0 +1,45 @@
+From d62141414a55ff3f1410b27db2a95224446e77a4 Mon Sep 17 00:00:00 2001
+From: Tomas Janousek <tjanouse@redhat.com>
+Date: Sun, 15 Jul 2007 23:39:42 -0700
+Subject: [PATCH] Use boot based time for uptime in /proc
+
+Commit 411187fb05cd11676b0979d9fbf3291db69dbce2 caused uptime not to increase
+during suspend.  This may cause confusion so I restore the old behaviour by
+using the boot based time instead of monotonic for uptime.
+
+Signed-off-by: Tomas Janousek <tjanouse@redhat.com>
+Acked-by: John Stultz <johnstul@us.ibm.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/proc/proc_misc.c |    1 +
+ kernel/timer.c      |    1 +
+ 2 files changed, 2 insertions(+), 0 deletions(-)
+
+diff --git a/fs/proc/proc_misc.c b/fs/proc/proc_misc.c
+index 19c9cbf..d24b8d4 100644
+--- a/fs/proc/proc_misc.c
++++ b/fs/proc/proc_misc.c
+@@ -105,6 +105,7 @@ static int uptime_read_proc(char *page, char **start, off_t off,
+ 	cputime_t idletime = cputime_add(init_task.utime, init_task.stime);
+ 
+ 	do_posix_clock_monotonic_gettime(&uptime);
++	monotonic_to_bootbased(&uptime);
+ 	cputime_to_timespec(idletime, &idle);
+ 	len = sprintf(page,"%lu.%02lu %lu.%02lu\n",
+ 			(unsigned long) uptime.tv_sec,
+diff --git a/kernel/timer.c b/kernel/timer.c
+index 1a69705..1ab3106 100644
+--- a/kernel/timer.c
++++ b/kernel/timer.c
+@@ -1114,6 +1114,7 @@ int do_sysinfo(struct sysinfo *info)
+ 		getnstimeofday(&tp);
+ 		tp.tv_sec += wall_to_monotonic.tv_sec;
+ 		tp.tv_nsec += wall_to_monotonic.tv_nsec;
++		monotonic_to_bootbased(&tp);
+ 		if (tp.tv_nsec - NSEC_PER_SEC >= 0) {
+ 			tp.tv_nsec = tp.tv_nsec - NSEC_PER_SEC;
+ 			tp.tv_sec++;
+-- 
+1.7.1
+

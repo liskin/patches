@@ -1,0 +1,63 @@
+From 81b3b0cce088866dc3cda099d7c8d6655849fd43 Mon Sep 17 00:00:00 2001
+From: Tomas Janousek <tomi@nomi.cz>
+Date: Wed, 20 May 2009 15:03:01 +0200
+Subject: [PATCH] Bug #6428, #16458, #21464: Fix crash due to uninitialized VModMap fields.
+
+In ProcXkbGetKbdByName, mrep.firstVModMapKey, .nVModMapKeys and
+.totalVModMapKeys were not initialized, contained random values and caused
+accesses to unallocated and later modified memory, causing
+XkbSizeVirtualModMap and XkbWriteVirtualModMap to see different number of
+nonzero values, resulting in writes past the end of an array in XkbSendMap.
+
+This patch initializes those values sensibly and reverts commits 5c0a2088 and
+6dd4fc46, which have been plain non-sense.
+
+Signed-off-by: Tomas Janousek <tomi@nomi.cz>
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+---
+ xkb/xkb.c |    8 +++++---
+ 1 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/xkb/xkb.c b/xkb/xkb.c
+index e7c9a31..3688bfc 100644
+--- a/xkb/xkb.c
++++ b/xkb/xkb.c
+@@ -1308,7 +1308,7 @@ XkbSizeVirtualModMap(XkbDescPtr xkb,xkbGetMapReply *rep)
+ 	rep->totalVModMapKeys= 0;
+ 	return 0;
+     }
+-    for (nRtrn=i=0;i<rep->nVModMapKeys-1;i++) {
++    for (nRtrn=i=0;i<rep->nVModMapKeys;i++) {
+ 	if (xkb->server->vmodmap[i+rep->firstVModMapKey]!=0)
+ 	    nRtrn++;
+     }
+@@ -1327,7 +1327,7 @@ unsigned short *	pMap;
+ 
+     wire= (xkbVModMapWireDesc *)buf;
+     pMap= &xkb->server->vmodmap[rep->firstVModMapKey];
+-    for (i=0;i<rep->nVModMapKeys-1;i++,pMap++) {
++    for (i=0;i<rep->nVModMapKeys;i++,pMap++) {
+ 	if (*pMap!=0) {
+ 	    wire->key= i+rep->firstVModMapKey;
+ 	    wire->vmods= *pMap;
+@@ -5668,7 +5668,7 @@ ProcXkbGetKbdByName(ClientPtr client)
+ 	    mrep.present = 0;
+ 	    mrep.totalSyms = mrep.totalActs =
+ 		mrep.totalKeyBehaviors= mrep.totalKeyExplicit= 
+-		mrep.totalModMapKeys= 0;
++		mrep.totalModMapKeys= mrep.totalVModMapKeys= 0;
+ 	    if (rep.reported&(XkbGBN_TypesMask|XkbGBN_ClientSymbolsMask)) {
+ 		mrep.present|= XkbKeyTypesMask;
+ 		mrep.firstType = 0;
+@@ -5694,6 +5694,8 @@ ProcXkbGetKbdByName(ClientPtr client)
+ 			mrep.firstKeyExplicit = new->min_key_code;
+ 		mrep.nKeyActs = mrep.nKeyBehaviors = 
+ 			mrep.nKeyExplicit = XkbNumKeys(new);
++		mrep.firstVModMapKey= new->min_key_code;
++		mrep.nVModMapKeys= XkbNumKeys(new);
+ 	    }
+ 	    else {
+ 		mrep.virtualMods= 0;
+-- 
+1.7.1
+

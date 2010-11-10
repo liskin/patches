@@ -1,0 +1,106 @@
+As far as I know, the current intel driver no longer respects the vsync
+settings in ~/.drirc, and the only way to configure this is using the
+SwapbuffersWait option in xorg.conf. This patch exposes this option as an
+XRandR property.
+
+Usage:
+
+$ xrandr --output LVDS1 --set SwapbuffersWait 1
+
+(you can use any output you want, the setting is global)
+
+ -- Tomáš Janoušek <tomi@nomi.cz>
+
+--- a/src/drmmode_display.c	2010-09-09 20:48:39.000000000 +0200
++++ b/src/drmmode_display.c	2010-09-09 20:58:51.000000000 +0200
+@@ -920,6 +920,9 @@
+ #define BACKLIGHT_DEPRECATED_NAME  "BACKLIGHT"
+ static Atom backlight_atom, backlight_deprecated_atom;
+ 
++#define SWAPBUFFERS_WAIT_NAME      "SwapbuffersWait"
++static Atom swapbuffers_wait_atom;
++
+ static void
+ drmmode_output_create_resources(xf86OutputPtr output)
+ {
+@@ -1044,6 +1047,31 @@
+ 	               "RRChangeOutputProperty error, %d\n", err);
+ 	}
+     }
++
++    {
++	INT32 data, swb_range[2];
++	intel_screen_private *intel = intel_get_screen_private(output->scrn);
++
++	swapbuffers_wait_atom = MakeAtom(SWAPBUFFERS_WAIT_NAME, sizeof(SWAPBUFFERS_WAIT_NAME) - 1, TRUE);
++	swb_range[0] = 0;
++	swb_range[1] = 1;
++
++	err = RRConfigureOutputProperty(output->randr_output, swapbuffers_wait_atom,
++	                                FALSE, TRUE, FALSE, 2, swb_range);
++	if (err != 0) {
++	    xf86DrvMsg(output->scrn->scrnIndex, X_ERROR,
++	               "RRConfigureOutputProperty error, %d\n", err);
++	}
++
++	data = intel->swapbuffers_wait;
++	err = RRChangeOutputProperty(output->randr_output, swapbuffers_wait_atom,
++	                             XA_INTEGER, 32, PropModeReplace, 1, &data,
++	                             FALSE, TRUE);
++	if (err != 0) {
++	    xf86DrvMsg(output->scrn->scrnIndex, X_ERROR,
++	               "RRChangeOutputProperty error, %d\n", err);
++	}
++    }
+ }
+ 
+ static Bool
+@@ -1054,6 +1082,24 @@
+     drmmode_ptr drmmode = drmmode_output->drmmode;
+     int i;
+ 
++    if (property == swapbuffers_wait_atom) {
++	INT32 val;
++
++	if (value->type != XA_INTEGER || value->format != 32 ||
++	    value->size != 1)
++	{
++	    return FALSE;
++	}
++
++	val = *(INT32 *)value->data;
++	if (val < 0 || val > 1)
++	    return FALSE;
++
++	intel_screen_private *intel = intel_get_screen_private(output->scrn);
++	intel->swapbuffers_wait = val;
++	return TRUE;
++    }
++
+     if (property == backlight_atom || property == backlight_deprecated_atom) {
+ 	INT32 val;
+ 
+@@ -1121,6 +1167,23 @@
+     drmmode_output_private_ptr drmmode_output = output->driver_private;
+     int err;
+ 
++    if (property == swapbuffers_wait_atom) {
++	INT32 val;
++
++	intel_screen_private *intel = intel_get_screen_private(output->scrn);
++	val = intel->swapbuffers_wait;
++	err = RRChangeOutputProperty(output->randr_output, property,
++	                             XA_INTEGER, 32, PropModeReplace, 1, &val,
++	                             FALSE, TRUE);
++	if (err != 0) {
++	    xf86DrvMsg(output->scrn->scrnIndex, X_ERROR,
++	               "RRChangeOutputProperty error, %d\n", err);
++	    return FALSE;
++	}
++
++	return TRUE;
++    }
++
+     if (property == backlight_atom || property == backlight_deprecated_atom) {
+ 	INT32 val;
+ 
