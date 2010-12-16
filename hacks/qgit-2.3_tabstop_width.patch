@@ -2,6 +2,17 @@ Set tabstop width to 8 characters. Qt's default is 80 pixels.
 
  -- Tomáš Janoušek <tomi@nomi.cz>
 
+diff -up qgit-2.3/src/filecontent.cpp.tabwidth qgit-2.3/src/filecontent.cpp
+--- qgit-2.3/src/filecontent.cpp.tabwidth	2008-10-05 10:29:31.000000000 +0200
++++ qgit-2.3/src/filecontent.cpp	2010-12-16 15:53:32.721177536 +0100
+@@ -57,6 +57,7 @@ FileContent::FileContent(QWidget* parent
+ 	fileHighlighter = new FileHighlighter(this);
+ 
+ 	setFont(QGit::TYPE_WRITER_FONT);
++	setTabStopWidth( fontMetrics().width( QString( "12345678" ) ) );
+ }
+ 
+ FileContent::~FileContent() {
 diff -up qgit-2.3/src/patchcontent.cpp.tabwidth qgit-2.3/src/patchcontent.cpp
 --- qgit-2.3/src/patchcontent.cpp.tabwidth	2008-05-24 07:33:36.000000000 +0200
 +++ qgit-2.3/src/patchcontent.cpp	2010-12-16 15:43:39.544510871 +0100
