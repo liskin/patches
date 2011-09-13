@@ -1,0 +1,20 @@
+This is a patch for thinkfan to use "level auto" instead of "level 7", letting
+the bios control the fan in higher temperatures.
+
+ -- Tomáš Janoušek <tomi@nomi.cz>
+
+diff -aur thinkfan-0.7.1.orig/system.c thinkfan-0.7.1/system.c
+--- thinkfan-0.7.1.orig/system.c	2010-06-14 01:31:18.000000000 +0200
++++ thinkfan-0.7.1/system.c	2011-09-11 15:23:38.823023686 +0200
+@@ -82,8 +82,10 @@
+ 	}
+ 	else {
+ 		if (unlikely(cur_lvl == INT_MIN)) strcpy(buf, "level disengaged\n");
++		else if (unlikely(cur_lvl == 7)) strcpy(buf, "level auto\n");
+ 		else snprintf(buf, 10, "level %d\n", cur_lvl);
+-		if (unlikely(write(ibm_fan, buf, 8) != 8)) {
++		size_t sz = strlen( buf );
++		if (unlikely(write(ibm_fan, buf, sz) != sz)) {
+ 			showerr(IBM_FAN);
+ 			message(LOG_ERR, MSG_ERR_FANCTRL);
+ 			errcnt++;
