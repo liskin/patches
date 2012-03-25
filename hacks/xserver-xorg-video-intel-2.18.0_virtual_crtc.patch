@@ -1,0 +1,299 @@
+This is a patch that adds a single virtual CRTC to an intel driver. The
+motivation is that this output may be turned on and cloned (in userspace) to
+another X server, which may be running on a different graphics card. My usecase
+is a triple-head (with hotplug) setup on a NVIDIA Optimus laptop. See
+<https://github.com/liskin/hybrid-screenclone>.
+
+ -- Tomáš Janoušek <tomi@nomi.cz>
+
+diff --git a/src/intel_display.c b/src/intel_display.c
+index 11d0e2b..dd12d5d 100644
+--- a/src/intel_display.c
++++ b/src/intel_display.c
+@@ -112,6 +112,8 @@ struct intel_output {
+ 	struct list link;
+ };
+ 
++#include "virtual_display.c"
++
+ static void
+ intel_output_dpms(xf86OutputPtr output, int mode);
+ 
+@@ -1348,7 +1350,7 @@ intel_output_init(ScrnInfoPtr scrn, struct intel_mode *mode, int num)
+ 	if (is_panel(koutput->connector_type))
+ 		intel_output_backlight_init(output);
+ 
+-	output->possible_crtcs = kencoder->possible_crtcs;
++	output->possible_crtcs = kencoder->possible_crtcs & ((1 << mode->mode_res->count_crtcs) - 1);
+ 	output->possible_clones = kencoder->possible_clones;
+ 	output->interlaceAllowed = TRUE;
+ 
+@@ -1421,6 +1423,9 @@ intel_xf86crtc_resize(ScrnInfoPtr scrn, int width, int height)
+ 		if (!crtc->enabled)
+ 			continue;
+ 
++		if (is_virtual(mode, i))
++			continue;
++
+ 		if (!intel_crtc_apply(crtc))
+ 			goto fail;
+ 	}
+@@ -1490,6 +1495,9 @@ intel_do_pageflip(intel_screen_private *intel,
+ 		if (!config->crtc[i]->enabled)
+ 			continue;
+ 
++		if (is_virtual(mode, i))
++			continue;
++
+ 		mode->flip_info = flip_info;
+ 		mode->flip_count++;
+ 
+@@ -1626,6 +1634,9 @@ Bool intel_mode_pre_init(ScrnInfoPtr scrn, int fd, int cpp)
+ 	for (i = 0; i < mode->mode_res->count_connectors; i++)
+ 		intel_output_init(scrn, mode, i);
+ 
++	virtual_crtc_init(scrn, mode);
++	virtual_output_init(scrn, mode);
++
+ 	xf86InitialConfiguration(scrn, TRUE);
+ 
+ 	has_flipping = 0;
+diff --git a/src/virtual_display.c b/src/virtual_display.c
+new file mode 100644
+index 0000000..eb51e45
+--- /dev/null
++++ b/src/virtual_display.c
+@@ -0,0 +1,233 @@
++static void
++virtual_crtc_dpms(xf86CrtcPtr intel_crtc, int mode)
++{
++
++}
++
++static Bool
++virtual_crtc_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
++			  Rotation rotation, int x, int y)
++{
++	return TRUE;
++}
++
++static void
++virtual_crtc_set_cursor_colors(xf86CrtcPtr crtc, int bg, int fg)
++{
++
++}
++
++static void
++virtual_crtc_set_cursor_position (xf86CrtcPtr crtc, int x, int y)
++{
++}
++
++static void
++virtual_crtc_load_cursor_argb(xf86CrtcPtr crtc, CARD32 *image)
++{
++}
++
++static void
++virtual_crtc_hide_cursor(xf86CrtcPtr crtc)
++{
++}
++
++static void
++virtual_crtc_show_cursor(xf86CrtcPtr crtc)
++{
++}
++
++static void *
++virtual_crtc_shadow_allocate(xf86CrtcPtr crtc, int width, int height)
++{
++	return NULL;
++}
++
++static PixmapPtr
++virtual_crtc_shadow_create(xf86CrtcPtr crtc, void *data, int width, int height)
++{
++	return NULL;
++}
++
++static void
++virtual_crtc_shadow_destroy(xf86CrtcPtr crtc, PixmapPtr rotate_pixmap, void *data)
++{
++}
++
++static void
++virtual_crtc_gamma_set(xf86CrtcPtr crtc,
++		       CARD16 *red, CARD16 *green, CARD16 *blue, int size)
++{
++}
++
++static void
++virtual_crtc_destroy(xf86CrtcPtr crtc)
++{
++	struct intel_crtc *intel_crtc = crtc->driver_private;
++
++	list_del(&intel_crtc->link);
++	free(intel_crtc);
++
++	crtc->driver_private = NULL;
++}
++
++static const xf86CrtcFuncsRec virtual_crtc_funcs = {
++	.dpms = virtual_crtc_dpms,
++	.set_mode_major = virtual_crtc_set_mode_major,
++	.set_cursor_colors = virtual_crtc_set_cursor_colors,
++	.set_cursor_position = virtual_crtc_set_cursor_position,
++	.show_cursor = virtual_crtc_show_cursor,
++	.hide_cursor = virtual_crtc_hide_cursor,
++	.load_cursor_argb = virtual_crtc_load_cursor_argb,
++	.shadow_create = virtual_crtc_shadow_create,
++	.shadow_allocate = virtual_crtc_shadow_allocate,
++	.shadow_destroy = virtual_crtc_shadow_destroy,
++	.gamma_set = virtual_crtc_gamma_set,
++	.destroy = virtual_crtc_destroy,
++};
++
++static void
++virtual_crtc_init(ScrnInfoPtr scrn, struct intel_mode *mode)
++{
++	xf86CrtcPtr crtc;
++	struct intel_crtc *intel_crtc;
++
++	intel_crtc = calloc(sizeof(struct intel_crtc), 1);
++	if (intel_crtc == NULL)
++		return;
++
++	crtc = xf86CrtcCreate(scrn, &virtual_crtc_funcs);
++	if (crtc == NULL) {
++		free(intel_crtc);
++		return;
++	}
++
++	intel_crtc->mode = mode;
++	intel_crtc->crtc = crtc;
++	crtc->driver_private = intel_crtc;
++	list_add(&intel_crtc->link, &mode->crtcs);
++}
++
++static xf86OutputStatus
++virtual_output_detect(xf86OutputPtr output)
++{
++	// return XF86OutputStatusConnected;
++	// return XF86OutputStatusDisconnected;
++	return XF86OutputStatusUnknown;
++}
++
++static Bool
++virtual_output_mode_valid(xf86OutputPtr output, DisplayModePtr pModes)
++{
++	return MODE_OK;
++}
++
++static DisplayModePtr
++virtual_output_get_modes(xf86OutputPtr output)
++{
++	DisplayModePtr i, m, p = NULL;
++	int max_x = 1920, max_y = 1200;
++	float max_vrefresh = 60.0;
++
++#if XORG_VERSION_CURRENT >= XORG_VERSION_NUMERIC(1,6,99,0,0)
++	m = xf86GetDefaultModes();
++#else
++	m = xf86GetDefaultModes(0,0);
++#endif
++
++	xf86ValidateModesSize(output->scrn, m, max_x, max_y, 0);
++
++	for (i = m; i; i = i->next) {
++		if (xf86ModeVRefresh(i) > max_vrefresh)
++			i->status = MODE_VSYNC;
++		if (p && i->HDisplay >= p->HDisplay &&
++		    i->VDisplay >= p->VDisplay &&
++		    xf86ModeVRefresh(i) >= xf86ModeVRefresh(p))
++			i->status = MODE_VSYNC;
++	}
++
++	xf86PruneInvalidModes(output->scrn, &m, FALSE);
++
++	return m;
++}
++
++static void
++virtual_output_destroy(xf86OutputPtr output)
++{
++	struct intel_output *intel_output = output->driver_private;
++
++	list_del(&intel_output->link);
++	free(intel_output);
++
++	output->driver_private = NULL;
++}
++
++static void
++virtual_output_dpms(xf86OutputPtr output, int dpms)
++{
++}
++
++static void
++virtual_output_create_resources(xf86OutputPtr output)
++{
++}
++
++static Bool
++virtual_output_set_property(xf86OutputPtr output, Atom property,
++			    RRPropertyValuePtr value)
++{
++	return TRUE;
++}
++
++static Bool
++virtual_output_get_property(xf86OutputPtr output, Atom property)
++{
++	return FALSE;
++}
++
++static const xf86OutputFuncsRec virtual_output_funcs = {
++	.create_resources = virtual_output_create_resources,
++#ifdef RANDR_12_INTERFACE
++	.set_property = virtual_output_set_property,
++	.get_property = virtual_output_get_property,
++#endif
++	.dpms = virtual_output_dpms,
++	.detect = virtual_output_detect,
++	.mode_valid = virtual_output_mode_valid,
++
++	.get_modes = virtual_output_get_modes,
++	.destroy = virtual_output_destroy
++};
++
++static void
++virtual_output_init(ScrnInfoPtr scrn, struct intel_mode *mode)
++{
++	xf86OutputPtr output;
++	struct intel_output *intel_output;
++	char name[32] = "VIRTUAL";
++
++	output = xf86OutputCreate (scrn, &virtual_output_funcs, name);
++	if (!output) {
++		return;
++	}
++
++	intel_output = calloc(sizeof(struct intel_output), 1);
++	if (!intel_output) {
++		xf86OutputDestroy(output);
++		return;
++	}
++
++	output->subpixel_order = SubPixelHorizontalRGB;
++	output->possible_crtcs = (1 << mode->mode_res->count_crtcs);
++	output->driver_private = intel_output;
++	intel_output->output = output;
++	intel_output->mode = mode;
++
++	list_add(&intel_output->link, &mode->outputs);
++}
++
++static Bool
++is_virtual(struct intel_mode *mode, int i)
++{
++    return i >= mode->mode_res->count_crtcs;
++}
