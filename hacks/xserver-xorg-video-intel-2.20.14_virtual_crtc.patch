@@ -13,7 +13,7 @@ to the Device section of your xorg.conf.
  -- Tomáš Janoušek <tomi@nomi.cz>
 
 diff --git a/src/intel_display.c b/src/intel_display.c
-index 2c93c2d..3daaade 100644
+index 2c93c2d..57dea60 100644
 --- a/src/intel_display.c
 +++ b/src/intel_display.c
 @@ -121,6 +121,8 @@ struct intel_output {
@@ -97,17 +97,17 @@ index 2c93c2d..3daaade 100644
  #ifdef INTEL_PIXMAP_SHARING
  	xf86ProviderSetup(scrn, NULL, "Intel");
  #endif
-@@ -1917,6 +1938,10 @@ Bool intel_crtc_on(xf86CrtcPtr crtc)
- 	if (!ret)
+@@ -1904,6 +1925,10 @@ Bool intel_crtc_on(xf86CrtcPtr crtc)
+ 	if (!crtc->enabled)
  		return FALSE;
  
 +	/* Virtual CRTC? */
 +	if (intel_crtc->mode_crtc == NULL)
-+		return ret;
++		return FALSE;
 +
- 	/* And finally check with the kernel that the fb is bound */
- 	drm_crtc = drmModeGetCrtc(intel_crtc->mode->fd, crtc_id(intel_crtc));
- 	if (drm_crtc == NULL)
+ 	/* Kernel manages CRTC status based on output config */
+ 	ret = FALSE;
+ 	for (i = 0; i < xf86_config->num_output; i++) {
 @@ -2019,6 +2044,10 @@ void intel_copy_fb(ScrnInfoPtr scrn)
  	fbcon_id = 0;
  	for (i = 0; i < xf86_config->num_crtc; i++) {
@@ -143,6 +143,25 @@ index 3b5262a..3050a56 100644
  	NUM_OPTIONS,
  };
  
+diff --git a/src/intel_uxa.c b/src/intel_uxa.c
+index 6d202c7..f0baef8 100644
+--- a/src/intel_uxa.c
++++ b/src/intel_uxa.c
+@@ -230,8 +230,13 @@ intel_uxa_pixmap_compute_size(PixmapPtr pixmap,
+ 	if (*tiling == I915_TILING_NONE) {
+ 		/* We only require a 64 byte alignment for scanouts, but
+ 		 * a 256 byte alignment for sharing with PRIME.
++		 *
++		 * XXX: 256 makes XShmGetImage terribly slow with resolutions
++		 * like 1680x1050, hence we revert back to 64. It shouldn't
++		 * break anything as screenclone is a poor man's PRIME and the
++		 * real PRIME isn't needed.
+ 		 */
+-		*stride = ALIGN(pitch, 256);
++		*stride = ALIGN(pitch, 64);
+ 		/* Round the height up so that the GPU's access to a 2x2 aligned
+ 		 * subspan doesn't address an invalid page offset beyond the
+ 		 * end of the GTT.
 diff --git a/src/virtual_display.c b/src/virtual_display.c
 new file mode 100644
 index 0000000..18f45bb
