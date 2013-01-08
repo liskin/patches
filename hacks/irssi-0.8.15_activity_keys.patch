@@ -1,0 +1,117 @@
+Assuming you use meta-key to switch between windows, this print the key in
+activity list instead of window numbers.  Example:
+http://nomi.cz/download/patches/irssi/irssi-act-keys.png
+
+ -- Tomáš Janoušek <tomi@nomi.cz>
+
+Index: src/fe-text/statusbar-items.c
+===================================================================
+--- src/fe-text/statusbar-items.c	(revision 4867)
++++ src/fe-text/statusbar-items.c	(working copy)
+@@ -22,6 +22,7 @@
+ #include "signals.h"
+ #include "settings.h"
+ #include "servers.h"
++#include "keyboard.h"
+ 
+ #include "themes.h"
+ #include "statusbar.h"
+@@ -69,18 +70,45 @@
+ 	}
+ }
+ 
++static int compare_key(KEY_REC *key, char *refnum)
++{
++	return strcmp(key->data, refnum);
++}
++
++static void find_key_for_refnum(GString *refnum)
++{
++	KEYINFO_REC *keyinfo;
++	GSList *key;
++
++	keyinfo = key_info_find("change_window");
++	if (keyinfo == NULL)
++		return;
++
++	key = g_slist_find_custom(keyinfo->keys, refnum->str, (GCompareFunc) compare_key);
++	if (key == NULL)
++		return;
++
++	if (strncmp(((KEY_REC*)key->data)->key, "meta-", 5) == 0)
++	    g_string_assign(refnum, ((KEY_REC*)key->data)->key + 5);
++	else
++	    g_string_assign(refnum, ((KEY_REC*)key->data)->key);
++}
++
+ static char *get_activity_list(MAIN_WINDOW_REC *window, int normal, int hilight)
+ {
+         THEME_REC *theme;
+ 	GString *str;
+ 	GString *format;
++	GString *refnum;
+ 	GList *tmp;
+         char *ret, *name, *value;
+         int is_det;
+ 	int add_name = settings_get_bool("actlist_names");
++	int use_keys = settings_get_bool("actlist_keys");;
+ 
+ 	str = g_string_new(NULL);
+ 	format = g_string_new(NULL);
++	refnum = g_string_new(NULL);
+ 
+ 	theme = window != NULL && window->active != NULL &&
+ 		window->active->theme != NULL ?
+@@ -103,25 +131,30 @@
+ 		switch (window->data_level) {
+ 		case DATA_LEVEL_NONE:
+ 		case DATA_LEVEL_TEXT:
+-			name = "{sb_act_text %d";
++			name = "{sb_act_text %s";
+ 			break;
+ 		case DATA_LEVEL_MSG:
+-			name = "{sb_act_msg %d";
++			name = "{sb_act_msg %s";
+ 			break;
+ 		default:
+                         if (window->hilight_color == NULL)
+-				name = "{sb_act_hilight %d";
++				name = "{sb_act_hilight %s";
+ 			else
+                                 name = NULL;
+ 			break;
+ 		}
+ 
++		/* find the key */
++		g_string_printf(refnum, "%d", window->refnum);
++		if (use_keys)
++			find_key_for_refnum(refnum);
++
+ 		if (name != NULL)
+-			g_string_printf(format, name, window->refnum);
++			g_string_printf(format, name, refnum->str);
+ 		else
+-			g_string_printf(format, "{sb_act_hilight_color %s %d",
++			g_string_printf(format, "{sb_act_hilight_color %s %s",
+ 						 window->hilight_color,
+-						 window->refnum);
++						 refnum->str);
+ 		if (add_name && window->active != NULL)
+ 			g_string_append_printf(format, ":%s", window->active->visible_name);
+ 		g_string_append_c(format, '}');
+@@ -134,6 +167,7 @@
+ 	ret = str->len == 0 ? NULL : str->str;
+         g_string_free(str, ret == NULL);
+ 	g_string_free(format, TRUE);
++	g_string_free(refnum, TRUE);
+         return ret;
+ }
+ 
+@@ -435,6 +469,7 @@
+ 	settings_add_time("misc", "lag_min_show", "1sec");
+ 	settings_add_str("lookandfeel", "actlist_sort", "refnum");
+ 	settings_add_bool("lookandfeel", "actlist_names", FALSE);
++	settings_add_bool("lookandfeel", "actlist_keys", FALSE);
+ 
+ 	statusbar_item_register("window", NULL, item_window_active);
+ 	statusbar_item_register("window_empty", NULL, item_window_empty);
