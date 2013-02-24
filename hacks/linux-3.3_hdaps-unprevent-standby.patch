@@ -1,0 +1,39 @@
+From 0d9322edc450ff66d8265fc4c17458a6a8d52232 Mon Sep 17 00:00:00 2001
+From: Tomas Janousek <tomi@nomi.cz>
+Date: Sun, 24 Feb 2013 12:38:27 +0100
+Subject: [PATCH] libata: issue IDLEIMMEDIATE to reenable standby timer after
+ parking
+
+ATA_CMD_CHK_POWER is not enough to reenable the standby timer on some devices.
+ATA_CMD_IDLEIMMEDIATE is, so issue it unless the device is already in standby.
+(Both of these are issued when it's safe to unpark the heads, of course.)
+---
+ drivers/ata/libata-eh.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/drivers/ata/libata-eh.c b/drivers/ata/libata-eh.c
+index 58db834..3a34b5f 100644
+--- a/drivers/ata/libata-eh.c
++++ b/drivers/ata/libata-eh.c
+@@ -3003,6 +3003,18 @@ static void ata_eh_park_issue_cmd(struct ata_device *dev, int park)
+ 		ata_dev_err(dev, "head unload failed!\n");
+ 		ehc->unloaded_mask &= ~(1 << dev->devno);
+ 	}
++
++	/* ATA_CMD_CHK_POWER is not enough to reenable the standby timer on some
++	 * devices.  ATA_CMD_IDLEIMMEDIATE is, so issue it unless the device is
++	 * already in standby.
++	 */
++	if (!park && !err_mask && tf.nsect) {
++		ata_tf_init(dev, &tf);
++		tf.command = ATA_CMD_IDLEIMMEDIATE;
++		tf.flags |= ATA_TFLAG_DEVICE | ATA_TFLAG_ISADDR;
++		tf.protocol |= ATA_PROT_NODATA;
++		ata_exec_internal(dev, &tf, NULL, DMA_NONE, NULL, 0, 0);
++	}
+ }
+ 
+ static int ata_eh_revalidate_and_attach(struct ata_link *link,
+-- 
+1.8.1.1
+
