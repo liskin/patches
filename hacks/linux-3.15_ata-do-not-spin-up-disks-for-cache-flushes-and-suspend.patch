@@ -1,0 +1,140 @@
+From e14e32a3ea67f509b29b84e4bc912c97fcf0fdb5 Mon Sep 17 00:00:00 2001
+From: Tomas Janousek <tomi@nomi.cz>
+Date: Sun, 4 May 2014 17:33:23 +0200
+Subject: [PATCH] ata: do not spin up disks for cache flushes and before
+ suspend
+
+For this to work, userspace needs to do "hdparm -C /dev/sda" before suspend so
+that we know whether the disk sleeps or not.  This is because I didn't have
+time to figure out how to do this in the kernel.
+
+WARNING: This is a massive hack and may even be dangerous, see
+<http://thread.gmane.org/gmane.linux.ide/18167>.
+
+Also, I have no idea why it is necessary to issue another CHECK POWER MODE
+in sd_sync_cache, but if I don't do that, the disk spins up on "Stopping
+disk".  :-(
+---
+ drivers/ata/libata-core.c |  7 +++++++
+ drivers/ata/libata-eh.c   |  2 +-
+ drivers/ata/libata-scsi.c | 10 ++++++++++
+ drivers/scsi/sd.c         | 17 +++++++++++++++++
+ include/linux/libata.h    |  1 +
+ 5 files changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/ata/libata-core.c b/drivers/ata/libata-core.c
+index 943cc8b..c36a0ae 100644
+--- a/drivers/ata/libata-core.c
++++ b/drivers/ata/libata-core.c
+@@ -5015,6 +5015,13 @@ void ata_qc_complete(struct ata_queued_cmd *qc)
+ 			break;
+ 		}
+ 
++		if (unlikely(qc->tf.command == ATA_CMD_CHK_POWER &&
++					qc->flags & ATA_QCFLAG_RESULT_TF &&
++					!qc->result_tf.nsect))
++			dev->flags |= ATA_DFLAG_SPUNDOWN;
++		else
++			dev->flags &= ~ATA_DFLAG_SPUNDOWN;
++
+ 		if (unlikely(dev->flags & ATA_DFLAG_DUBIOUS_XFER))
+ 			ata_verify_xfer(qc);
+ 
+diff --git a/drivers/ata/libata-eh.c b/drivers/ata/libata-eh.c
+index c2f400f..1cc6969 100644
+--- a/drivers/ata/libata-eh.c
++++ b/drivers/ata/libata-eh.c
+@@ -2828,7 +2828,7 @@ int ata_eh_reset(struct ata_link *link, int classify,
+ 		 * drives from sleeping mode.
+ 		 */
+ 		dev->pio_mode = XFER_PIO_0;
+-		dev->flags &= ~ATA_DFLAG_SLEEPING;
++		dev->flags &= ~ATA_DFLAG_SLEEPING & ~ATA_DFLAG_SPUNDOWN;
+ 
+ 		if (ata_phys_link_offline(ata_dev_phys_link(dev)))
+ 			continue;
+diff --git a/drivers/ata/libata-scsi.c b/drivers/ata/libata-scsi.c
+index ef8567d..fff6e44 100644
+--- a/drivers/ata/libata-scsi.c
++++ b/drivers/ata/libata-scsi.c
+@@ -1414,6 +1414,12 @@ static unsigned int ata_scsi_flush_xlat(struct ata_queued_cmd *qc)
+ {
+ 	struct ata_taskfile *tf = &qc->tf;
+ 
++	if (qc->dev->flags & ATA_DFLAG_SPUNDOWN) {
++		ata_dev_printk(qc->dev, KERN_NOTICE,
++				"skipping sync, device spun down\n");
++		goto skip;
++	}
++
+ 	tf->flags |= ATA_TFLAG_DEVICE;
+ 	tf->protocol = ATA_PROT_NODATA;
+ 
+@@ -1426,6 +1432,10 @@ static unsigned int ata_scsi_flush_xlat(struct ata_queued_cmd *qc)
+ 	qc->flags |= ATA_QCFLAG_IO;
+ 
+ 	return 0;
++
++ skip:
++	qc->scsicmd->result = SAM_STAT_GOOD;
++	return 1;
+ }
+ 
+ /**
+diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
+index efcbcd1..f167347 100644
+--- a/drivers/scsi/sd.c
++++ b/drivers/scsi/sd.c
+@@ -51,6 +51,7 @@
+ #include <linux/async.h>
+ #include <linux/slab.h>
+ #include <linux/pm_runtime.h>
++#include <linux/ata.h>
+ #include <asm/uaccess.h>
+ #include <asm/unaligned.h>
+ 
+@@ -1430,6 +1431,16 @@ out:
+ 	return retval;
+ }
+ 
++static void scsi_device_ata_cmd_chk_power(struct scsi_device *sdp)
++{
++	unsigned char cmd[16] = { ATA_16, ATA_PROT_NODATA << 1, 0x20, 0, 0, 0, 0, 0, 0,
++		0, 0, 0, 0, 0, ATA_CMD_CHK_POWER, 0 };
++	struct scsi_sense_hdr sshdr;
++
++	scsi_execute_req_flags(sdp, cmd, DMA_NONE, NULL, 0, &sshdr,
++			SD_TIMEOUT, SD_MAX_RETRIES, NULL, REQ_PM);
++}
++
+ static int sd_sync_cache(struct scsi_disk *sdkp)
+ {
+ 	int retries, res;
+@@ -1441,6 +1452,12 @@ static int sd_sync_cache(struct scsi_disk *sdkp)
+ 	if (!scsi_device_online(sdp))
+ 		return -ENODEV;
+ 
++	/*
++	 * Issue CHECK POWER MODE.  This helps the disk realize
++	 * it does not need to spin up on STANDBYNOW1.
++	 */
++	scsi_device_ata_cmd_chk_power(sdp);
++
+ 	for (retries = 3; retries > 0; --retries) {
+ 		unsigned char cmd[10] = { 0 };
+ 
+diff --git a/include/linux/libata.h b/include/linux/libata.h
+index 5ab4e3a..aa0d6cd 100644
+--- a/include/linux/libata.h
++++ b/include/linux/libata.h
+@@ -168,6 +168,7 @@ enum {
+ 
+ 	ATA_DFLAG_PIO		= (1 << 12), /* device limited to PIO mode */
+ 	ATA_DFLAG_NCQ_OFF	= (1 << 13), /* device limited to non-NCQ mode */
++	ATA_DFLAG_SPUNDOWN	= (1 << 14), /* device is spun down */
+ 	ATA_DFLAG_SLEEPING	= (1 << 15), /* device is sleeping */
+ 	ATA_DFLAG_DUBIOUS_XFER	= (1 << 16), /* data transfer not verified */
+ 	ATA_DFLAG_NO_UNLOAD	= (1 << 17), /* device doesn't support unload */
+-- 
+2.0.0.rc0
+
