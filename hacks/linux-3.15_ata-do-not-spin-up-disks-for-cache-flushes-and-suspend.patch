@@ -1,4 +1,4 @@
-From e14e32a3ea67f509b29b84e4bc912c97fcf0fdb5 Mon Sep 17 00:00:00 2001
+From 183564ee21db5b3bb7b71f43b74e60d26b3a84e2 Mon Sep 17 00:00:00 2001
 From: Tomas Janousek <tomi@nomi.cz>
 Date: Sun, 4 May 2014 17:33:23 +0200
 Subject: [PATCH] ata: do not spin up disks for cache flushes and before
@@ -10,17 +10,13 @@ time to figure out how to do this in the kernel.
 
 WARNING: This is a massive hack and may even be dangerous, see
 <http://thread.gmane.org/gmane.linux.ide/18167>.
-
-Also, I have no idea why it is necessary to issue another CHECK POWER MODE
-in sd_sync_cache, but if I don't do that, the disk spins up on "Stopping
-disk".  :-(
 ---
  drivers/ata/libata-core.c |  7 +++++++
  drivers/ata/libata-eh.c   |  2 +-
- drivers/ata/libata-scsi.c | 10 ++++++++++
- drivers/scsi/sd.c         | 17 +++++++++++++++++
+ drivers/ata/libata-scsi.c | 16 ++++++++++++++++
+ drivers/scsi/sd.c         |  1 +
  include/linux/libata.h    |  1 +
- 5 files changed, 36 insertions(+), 1 deletion(-)
+ 5 files changed, 26 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/ata/libata-core.c b/drivers/ata/libata-core.c
 index 943cc8b..c36a0ae 100644
@@ -54,10 +50,23 @@ index c2f400f..1cc6969 100644
  		if (ata_phys_link_offline(ata_dev_phys_link(dev)))
  			continue;
 diff --git a/drivers/ata/libata-scsi.c b/drivers/ata/libata-scsi.c
-index ef8567d..fff6e44 100644
+index ef8567d..2fc1a12 100644
 --- a/drivers/ata/libata-scsi.c
 +++ b/drivers/ata/libata-scsi.c
-@@ -1414,6 +1414,12 @@ static unsigned int ata_scsi_flush_xlat(struct ata_queued_cmd *qc)
+@@ -1374,6 +1374,12 @@ static unsigned int ata_scsi_start_stop_xlat(struct ata_queued_cmd *qc)
+ 		     system_entering_hibernation())
+ 			goto skip;
+ 
++		if (qc->dev->flags & ATA_DFLAG_SPUNDOWN) {
++			ata_dev_printk(qc->dev, KERN_NOTICE,
++					"skipping stop, device spun down\n");
++			goto skip;
++		}
++
+ 		/* Issue ATA STANDBY IMMEDIATE command */
+ 		tf->command = ATA_CMD_STANDBYNOW1;
+ 	}
+@@ -1414,6 +1420,12 @@ static unsigned int ata_scsi_flush_xlat(struct ata_queued_cmd *qc)
  {
  	struct ata_taskfile *tf = &qc->tf;
  
@@ -70,7 +79,7 @@ index ef8567d..fff6e44 100644
  	tf->flags |= ATA_TFLAG_DEVICE;
  	tf->protocol = ATA_PROT_NODATA;
  
-@@ -1426,6 +1432,10 @@ static unsigned int ata_scsi_flush_xlat(struct ata_queued_cmd *qc)
+@@ -1426,6 +1438,10 @@ static unsigned int ata_scsi_flush_xlat(struct ata_queued_cmd *qc)
  	qc->flags |= ATA_QCFLAG_IO;
  
  	return 0;
@@ -82,7 +91,7 @@ index ef8567d..fff6e44 100644
  
  /**
 diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
-index efcbcd1..f167347 100644
+index efcbcd1..21e0f1f 100644
 --- a/drivers/scsi/sd.c
 +++ b/drivers/scsi/sd.c
 @@ -51,6 +51,7 @@
@@ -92,36 +101,6 @@ index efcbcd1..f167347 100644
 +#include <linux/ata.h>
  #include <asm/uaccess.h>
  #include <asm/unaligned.h>
- 
-@@ -1430,6 +1431,16 @@ out:
- 	return retval;
- }
- 
-+static void scsi_device_ata_cmd_chk_power(struct scsi_device *sdp)
-+{
-+	unsigned char cmd[16] = { ATA_16, ATA_PROT_NODATA << 1, 0x20, 0, 0, 0, 0, 0, 0,
-+		0, 0, 0, 0, 0, ATA_CMD_CHK_POWER, 0 };
-+	struct scsi_sense_hdr sshdr;
-+
-+	scsi_execute_req_flags(sdp, cmd, DMA_NONE, NULL, 0, &sshdr,
-+			SD_TIMEOUT, SD_MAX_RETRIES, NULL, REQ_PM);
-+}
-+
- static int sd_sync_cache(struct scsi_disk *sdkp)
- {
- 	int retries, res;
-@@ -1441,6 +1452,12 @@ static int sd_sync_cache(struct scsi_disk *sdkp)
- 	if (!scsi_device_online(sdp))
- 		return -ENODEV;
- 
-+	/*
-+	 * Issue CHECK POWER MODE.  This helps the disk realize
-+	 * it does not need to spin up on STANDBYNOW1.
-+	 */
-+	scsi_device_ata_cmd_chk_power(sdp);
-+
- 	for (retries = 3; retries > 0; --retries) {
- 		unsigned char cmd[10] = { 0 };
  
 diff --git a/include/linux/libata.h b/include/linux/libata.h
 index 5ab4e3a..aa0d6cd 100644
